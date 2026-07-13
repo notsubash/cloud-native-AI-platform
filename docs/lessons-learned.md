@@ -31,3 +31,17 @@ Treated `terraform init` as per-module: one bad `module` block does not mean the
 Declared provider sources in every module that uses them (`hetznercloud/hcloud`, `cloudflare/cloudflare`). Root `required_providers` alone is not enough — child modules default to `hashicorp/<name>` and init fails even after the correct plugins install.
 
 Kept cost control explicit: run `plan` early, delay `apply` until the VPS is actually needed so Hetzner stays off the bill during scaffolding.
+
+## Kubernetes foundations (local)
+
+Mapped Compose concepts straight onto Kubernetes: services → Deployments + Services, env/`.env` → ConfigMap + Secret, volumes → PVC, `depends_on` → readiness probes. Applied everything with `kubectl apply -k kubernetes/base` under namespace `ai-platform`.
+
+Wired in-cluster DNS on purpose: `DATABASE_URL` / `REDIS_URL` must use Service names (`postgres`, `redis`), not `localhost` — the API pod’s localhost is itself, not the host or sibling containers.
+
+Reused the FastAPI probes as designed: liveness → `/health` (process up), readiness → `/ready` (Postgres + Redis reachable). That split is what keeps a pod from getting traffic while deps are still starting.
+
+Hit `ErrImageNeverPull` with `imagePullPolicy: Never` when the image existed on the host Docker daemon but not on the node. Docker Desktop’s **kind** cluster does not share the host image store, and it does not show up in the standalone `kind` CLI (`kind get clusters` / `kind load` are empty or wrong).
+
+Preferred Docker Desktop **kubeadm** for this lab so a local `docker build -t cloud-native-ai-api:local` is visible with `Never` and no import step. Tag must match `api.yaml` exactly — Compose’s image name is a different string and does not help the Deployment.
+
+Do not run `make up` (Compose) alongside the K8s stack. Access the API with `kubectl port-forward svc/api 8000:8000`, then curl `/health`, `/ready`, and `/v1/summarize`. After code changes: rebuild the image and `rollout restart deploy/api`.

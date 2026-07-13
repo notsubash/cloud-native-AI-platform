@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: ai-platform
+  labels:
+    app: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          # Built locally and loaded into kind/k3d — see Part 2
+          image: cloud-native-ai-api:local
+          imagePullPolicy: Never   # kind: Never/IfNotPresent avoids Docker Hub pull of a private tag
+          ports:
+            - containerPort: 8000
+          envFrom:
+            # Inject ALL keys from ConfigMap as env vars
+            - configMapRef:
+                name: api-config
+          env:
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DEEPSEEK_API_KEY
+          # Your FastAPI already designed these endpoints for K8s:
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: ai-platform
+spec:
+  selector:
+    app: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
