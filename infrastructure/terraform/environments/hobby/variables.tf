@@ -39,3 +39,4 @@ variable "subdomain" {
   type        = string
   description = "Hostname prefix, e.g. lab → lab.example.com"
   default     = "lab"
+}
