@@ -1,0 +1,9 @@
+# Chart identity. "version" = chart packaging version.
+# "appVersion" = the app this chart deploys(  informational; image tag still comes from values)
+
+apiVersion: v2
+name: api
+description: FastAPI gateway for the cloud-native AI platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
