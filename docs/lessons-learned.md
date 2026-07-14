@@ -45,3 +45,17 @@ Hit `ErrImageNeverPull` with `imagePullPolicy: Never` when the image existed on 
 Preferred Docker Desktop **kubeadm** for this lab so a local `docker build -t cloud-native-ai-api:local` is visible with `Never` and no import step. Tag must match `api.yaml` exactly — Compose’s image name is a different string and does not help the Deployment.
 
 Do not run `make up` (Compose) alongside the K8s stack. Access the API with `kubectl port-forward svc/api 8000:8000`, then curl `/health`, `/ready`, and `/v1/summarize`. After code changes: rebuild the image and `rollout restart deploy/api`.
+
+## Helm foundations
+
+Owned the API as `helm/api` (Chart.yaml, values, templates, helpers, NOTES) and left Postgres/Redis to Bitnami — own app charts, consume mature data-store charts.
+
+`values-local.yaml` is the local knob file: `pullPolicy: Never`, stub LLM, tiny resources, and Bitnami Service DNS (`postgres-postgresql`, `redis-master`). Defaults in `values.yaml` stay closer to Phase 3 names; local overrides win with `-f`.
+
+Proved the exit checklist: `helm upgrade ... --set image.tag=local-v2` moved the pod image; `helm rollback api 1` restored `cloud-native-ai-api:local` and wrote a new history revision (rollback is a new revision, not a rewind of the list).
+
+Service DNS still bites after switching charts: Bitnami release `postgres` → Service `postgres-postgresql`, Redis standalone → `redis-master`. Wrong host → `/ready` fails even when pods look fine.
+
+Do not run Phase 3 raw `api`/`postgres`/`redis` next to Helm/Bitnami in the same namespace — two Deployments fight for the same mental model. Pick one path: today that path is Bitnami + `helm/api`.
+
+`helm template` before `install` caught path typos (`./help/...`); `helm lint` + rendered YAML beat debugging CrashLoops from bad templates.

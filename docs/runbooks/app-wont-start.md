@@ -3,6 +3,8 @@
 Stack: Docker Desktop Kubernetes + `kubernetes/base` (api, postgres, redis).  
 Context: `docker-desktop`. Namespace: `ai-platform`.
 
+**After Phase 4**, prefer Bitnami + `helm/api` instead of this raw path — see [helm.md](helm.md) for which stack to run and the Helm cold-start.
+
 Prefer **kubeadm** in Docker Desktop for Phase 3 (local images work with `imagePullPolicy: Never`).  
 Docker Desktop **kind** does not show up in `kind get clusters` / `kind load` — host images are not on the node until you switch to kubeadm or import manually.
 
