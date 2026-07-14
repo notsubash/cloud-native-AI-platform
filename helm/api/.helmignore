@@ -1,0 +1,4 @@
+# Files excluded when packaging (helm package) — same idea as .gitignore
+.DS_Store
+*.md
+.values-*.local.yaml

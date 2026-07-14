@@ -1,0 +1,20 @@
+# Overrides for kind/k3d
+replicaCount: 1
+
+image:
+  repository: cloud-native-ai-api
+  tag: local
+  pullPolicy: Never
+
+config:
+  LOG_LEVEL: "DEBUG"
+  LLM_MODE: "stub"
+  DATABASE_URL: "postgresql+psycopg://app:app@postgres-postgresql:5432/app"
+  REDIS_URL: "redis://redis-master:6379/0"
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi

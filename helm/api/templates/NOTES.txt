@@ -1,0 +1,10 @@
+API chart installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+1. Port-forward:
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "api.fullname" . }} 8000:{{ .Values.service.port }}
+
+2. Then:
+   curl http://127.0.0.1:8000/health
+   curl http://127.0.0.1:8000/ready
+
+Image: {{ .Values.image.repository }}:{{ .Values.image.tag }}

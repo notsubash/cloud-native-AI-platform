@@ -1,0 +1,61 @@
+# Default values — safe-ish for learning; override per env with -f values-*.yaml
+
+# How many API pods
+replicaCount: 1
+
+image:
+  # Must match how we built/loaded the image
+  repository: cloud-native-ai-api
+  tag: local
+  # Never = dont ask the registry (kind/k3d with locally loaded image)
+  pullPolicy: Never
+
+# Optional: imagePullSecrets when we use GHCR later
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Non-secret config -> ConfigMap -> envFrom (same pattern as k8s/base/configmap.yaml)
+config:
+  LOG_LEVEL: "INFO"
+  LLM_MODE: "stub"
+  # In-cluster DNS names must match the Postgres/Redis Service names we deploy
+  DATABASE_URL: "postgresql+psycopg://app:app@postgres:5432/app"
+  REDIS_URL: "redis://redis:6379/0"
+
+
+# Lab-only Secret. We will replace this with SOPS / Sealed Secrets later.
+secret:
+  create: true
+  # stringData keys (plain in values for local lab ONLY)
+  POSTGRES_USER: "app"
+  POSTGRES_PASSWORD: "app"
+  POSTGRES_DB: "app"
+  DEEPSEEK_API_KEY: ""
+
+# Optional external secret name if secret.create = false
+existingSecret: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+probes:
+  liveness: 
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  readiness:
+    path: /ready
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+# Namespace is usually set by helm -n, not hardcoded int emplates
