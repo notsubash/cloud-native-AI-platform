@@ -59,3 +59,17 @@ Service DNS still bites after switching charts: Bitnami release `postgres` → S
 Do not run Phase 3 raw `api`/`postgres`/`redis` next to Helm/Bitnami in the same namespace — two Deployments fight for the same mental model. Pick one path: today that path is Bitnami + `helm/api`.
 
 `helm template` before `install` caught path typos (`./help/...`); `helm lint` + rendered YAML beat debugging CrashLoops from bad templates.
+
+## CI & GHCR (GitHub Actions)
+
+Split the pipeline into jobs on purpose: `test` fails fast on lint/pytest before Buildx spends time; `build` only runs after tests green; `helm` lint/template runs in parallel with `build` as an offline chart check — no cluster, no deploy.
+
+Kept CI and the Dockerfile aligned: Python 3.12, same `requirements.txt`, same golden-path pytest as `make test` — stub LLM via dependency overrides so no API key in secrets.
+
+PR runs prove the Dockerfile (`build` with `push: false`); only `push` to `main` logs into GHCR and publishes. Unmerged code never becomes `:latest` — the registry stays a merge gate, not a PR artifact dump.
+
+GHCR auth is `GITHUB_TOKEN` + `packages: write` on the build job only — no PAT for same-account push. Tags: immutable `sha-<short>` on every build context, `latest` only on default-branch pushes (pin deploys on SHA, not floating latest).
+
+Buildx + `cache-from` / `cache-to type=gha,mode=max` stores builder layers in GitHub Actions cache — first run cold (~0% cached), later runs reuse pip/install layers. The `.dockerbuild` artifact is a Buildx record, not a published package.
+
+CI produces images; it does not deploy. Helm values still point at local tags for laptop work — wiring `image.repository` to `ghcr.io/<owner>/cloud-native-ai-api` and `pullPolicy: IfNotPresent` is Phase 6 (GitOps on the VPS), not something to bolt onto Actions with `kubectl apply`.

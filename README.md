@@ -1,64 +1,82 @@
 # Cloud Native AI Platform
 
-Cost-first learning lab: infrastructure around a deliberately dumb AI API.
+A cost-bounded platform for a minimal AI summarization API, built with production-oriented patterns: multi-stage containers, Kubernetes probes, Helm packaging, Terraform foundations, and GitHub Actions publishing immutable images to GHCR.
 
-See [PLAN.md](PLAN.md) for the full roadmap and [docs/cost-budget.md](docs/cost-budget.md) for the **$15/mo** hard cap.
+Monthly spend is capped at **$15**. See [docs/cost-budget.md](docs/cost-budget.md).
 
-## Progress so far
+## Platform status
 
-| Phase | Status | What landed |
-|-------|--------|-------------|
-| 1 — Local API + Compose | Done | FastAPI (`/health`, `/ready`, `/metrics`, `/v1/summarize`), multi-stage image, Compose, tests |
-| 2 — Terraform foundations | Scaffolded | Modules + hobby env; **plan only** until cloud VPS is needed |
-| 3 — Local Kubernetes | Done | `kubernetes/base`, probes, port-forward; runbook [docs/runbooks/app-wont-start.md](docs/runbooks/app-wont-start.md) |
-| 4 — Helm | Done | `helm/api`, Bitnami Postgres/Redis, upgrade/rollback; runbook [docs/runbooks/helm.md](docs/runbooks/helm.md) |
-| 5+ — CI / GitOps / cloud | Next | See `PLAN.md` |
+| Layer | Status | Delivered |
+|-------|--------|-----------|
+| API + local dev | Done | FastAPI (`/health`, `/ready`, `/metrics`, `POST /v1/summarize`), Compose, golden-path tests |
+| Container image | Done | Multi-stage Dockerfile, non-root runtime |
+| Terraform (hobby) | Scaffolded | Hetzner modules + hobby env; not applied until a VPS is needed |
+| Kubernetes (local) | Done | `kubernetes/base`, liveness/readiness probes. [Runbook](docs/runbooks/app-wont-start.md) |
+| Helm | Done | `helm/api` + Bitnami Postgres/Redis. [Runbook](docs/runbooks/helm.md) |
+| CI / registry | Done | GitHub Actions: test → build → push to GHCR on `main` |
+| GitOps / cloud deploy | Next | Argo CD + VPS |
 
-Lessons: [docs/lessons-learned.md](docs/lessons-learned.md). Chart vs Bitnami: [helm/NOTES-bitnami-compare.md](helm/NOTES-bitnami-compare.md).
+Operational notes: [docs/lessons-learned.md](docs/lessons-learned.md).
 
-## Which stack to run (pick one)
+## Architecture
 
-| Goal | Use |
-|------|-----|
-| Fast laptop loop, no cluster | **Compose** below |
-| Learn raw Deployments / Services | **Kustomize** (`kubectl apply -k kubernetes/base`) |
-| Day-to-day after Phase 4 | **Helm + Bitnami** — [docs/runbooks/helm.md](docs/runbooks/helm.md) |
+```
+Client → FastAPI (apps/api) → PostgreSQL
+                          └→ Redis
+```
 
-Do not run Compose and the cluster at the same time. Terraform is offline until you need a VPS.
+The API exposes standard health and metrics endpoints. LLM calls go through a single `summarize()` abstraction: `stub` in tests/CI, `deepseek` via OpenAI-compatible HTTP when configured. Liveness (`/health`) stays cheap; readiness (`/ready`) gates traffic until Postgres and Redis are reachable.
 
----
+## Repository layout
 
-## Phase 1 — local Compose
+```
+apps/api/              FastAPI service, Dockerfile, tests
+kubernetes/base/       Raw Kustomize manifests
+helm/api/              Application Helm chart
+infrastructure/        Terraform modules + hobby environment
+.github/workflows/     CI pipeline
+docs/                  Runbooks, architecture, cost budget
+```
+
+## Deployment options
+
+Pick **one** local stack. Do not run Compose and a cluster side by side.
+
+| Goal | Path |
+|------|------|
+| Fastest dev loop | Docker Compose (below) |
+| Learn raw K8s objects | `kubectl apply -k kubernetes/base` |
+| Day-to-day cluster work | Helm + Bitnami. [Runbook](docs/runbooks/helm.md) |
+
+Cloud infrastructure (`infrastructure/terraform/environments/hobby`) stays offline until a VPS is required.
+
+## Local development (Compose)
 
 ```bash
 cp .env.example .env
-# For DeepSeek: set LLM_MODE=deepseek and DEEPSEEK_API_KEY=sk-...
-make up          # or: docker compose up --build -d
+# Optional: LLM_MODE=deepseek and DEEPSEEK_API_KEY=sk-...
+make up
 curl -s localhost:8000/health
 curl -s localhost:8000/ready
-curl -s localhost:8000/metrics | head
 curl -s -X POST localhost:8000/v1/summarize \
   -H 'content-type: application/json' \
   -d '{"text":"Cloud native platforms need boring, reliable plumbing."}'
-make test        # uses stub via dependency overrides — no API key required
+make test    # stub LLM, no API key required
 make down
 ```
 
-Services: API (`:8000`), Postgres (`:5432`), Redis (`:6379`). Compose healthcheck uses `/health` (liveness); K8s/Helm use `/ready` for traffic routing.
+Services: API (`:8000`), Postgres (`:5432`), Redis (`:6379`).
 
-**DeepSeek:** get an API key from [platform.deepseek.com](https://platform.deepseek.com). Model defaults to `deepseek-chat` (OpenAI-compatible `/chat/completions`).
-
-## Phase 4 — Helm (preferred local cluster path)
+## Kubernetes (Helm)
 
 Prerequisites: Docker Desktop Kubernetes (kubeadm), image built as `cloud-native-ai-api:local`.
 
 ```bash
-# Bitnami data stores + our API chart — full sequence in the runbook
 helm upgrade --install api ./helm/api -n ai-platform -f ./helm/api/values-local.yaml
 kubectl -n ai-platform port-forward svc/api 8000:8000
 ```
 
-Upgrade / rollback:
+Upgrade and rollback:
 
 ```bash
 helm upgrade api ./helm/api -n ai-platform -f ./helm/api/values-local.yaml --set image.tag=local-v2
@@ -66,8 +84,29 @@ helm rollback api 1 -n ai-platform
 helm history api -n ai-platform
 ```
 
-Full start, DNS notes, and tear-down: [docs/runbooks/helm.md](docs/runbooks/helm.md).
+Full sequence, DNS notes, and tear-down: [docs/runbooks/helm.md](docs/runbooks/helm.md).
 
-## Why multi-stage Docker builds
+## CI / container registry
 
-Builder stage installs deps; runtime stage copies only the venv + app. Smaller images → faster CI pulls and a smaller attack surface (no compilers/pip cache in prod).
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pull requests and pushes to `main`:
+
+| Job | Purpose |
+|-----|---------|
+| `test` | `compileall` + pytest (`apps/api`) |
+| `build` | Buildx image build; push to GHCR on `main` only |
+| `helm` | `helm lint` + `helm template` (offline chart validation) |
+
+Published image: `ghcr.io/<owner>/cloud-native-ai-api`, tagged `sha-<short>` (immutable) and `latest` on `main`.
+
+Pull after merge:
+
+```bash
+gh auth token | docker login ghcr.io -u <owner> --password-stdin
+docker pull ghcr.io/<owner>/cloud-native-ai-api:sha-<commit>
+```
+
+PR builds validate the Dockerfile without publishing. Deploy wiring to GHCR images is handled by GitOps, not in CI.
+
+## Image build
+
+The API uses a multi-stage Dockerfile: a builder stage installs dependencies into a venv; the runtime stage copies only the venv and application code under a non-root user. Smaller images mean faster CI pulls and a reduced attack surface.
