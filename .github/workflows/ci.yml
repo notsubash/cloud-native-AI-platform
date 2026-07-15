@@ -1,0 +1,200 @@
+# =============================================================================
+# CI: test → build → push image to GHCR
+# =============================================================================
+# Goal:
+#   PR / push → lint + unit tests → docker buildx (cache) → push GHCR (main only)
+#               → (optional) helm template
+#
+# Mental model:
+#   Event → Workflow → Job(s) → Steps
+#   Each job runs on a fresh ubuntu VM. When the job ends, the VM is gone —
+#   so anything we want to keep (images) must be pushed somewhere (GHCR).
+# =============================================================================
+
+name: ci
+
+# WHEN does this workflow run?
+# - pull_request: every PR into main (prove green before merge)
+# - push to main: after merge — this is when we publish the image
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Default permissions are often "read" only for GITHUB_TOKEN.
+# Principle: least privilege — test job does not need packages:write.
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: lint + unit tests (fast feedback, no Docker registry talk)
+  # ---------------------------------------------------------------------------
+  # Why a separate job?
+  # - Fail cheap: don't spend 2 minutes building an image if tests fail.
+  # - Clear status check name for branch protection ("test").
+  # ---------------------------------------------------------------------------
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # only clones the repo
+
+    defaults:
+      run:
+      # All "run:" steps in this job start in apps/api unless overridden.
+        working-directory: apps/api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # PYTHON — install the same major version as our Dockerfile (3.12)
+      # cache: pip → GitHub caches pip downloads between runs (faster installs)
+      # -----------------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/requirements.txt
+
+      # -----------------------------------------------------------------------
+      # DEPS — install what the app + tests need
+      # Same requirements.txt as the image; CI and Docker stay aligned.
+      # -----------------------------------------------------------------------
+      - name: Install dependencies
+        run: pip install -r requirements.txt   
+
+      # Lint
+      - name: Lint (bytecode compile)
+        run: python -m compileall -q app tests
+
+      # -----------------------------------------------------------------------
+      # TESTS — same golden-path suite as `make test`, but without Compose
+      # -----------------------------------------------------------------------
+      - name: Unit / golden-path tests
+        run: pytest -q
+
+  # ---------------------------------------------------------------------------
+  # Job 2: build image (+ push on main only)
+  # ---------------------------------------------------------------------------
+  build:
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # REQUIRED to docker push to ghcr.io with GITHUB_TOKEN
+    # Map short names we reuse in steps (keeps tags consistent).
+    # github.repository = "owner/repo" (lowercase later for GHCR rules).
+    env:
+      # GHCR image name: ghcr.io/<owner>/cloud-native-ai-api
+      # Using a fixed image name (not full repo path) matches your local tag style.
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cloud-native-ai-api
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Buildx = BuildKit builder. Needed for:
+      #   - cache-from / cache-to (GitHub Actions cache backend)
+      #   - consistent modern build behavior
+      # You are NOT doing multi-arch here (cost / complexity).
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # -----------------------------------------------------------------------
+      # Login to GHCR — only when we are going to push (main branch).
+      # On PRs we still BUILD (to prove Dockerfile works) but skip login/push.
+      #
+      # Auth model (teaching):
+      #   - registry: ghcr.io
+      #   - username: github.actor (the user/bot that triggered the run)
+      #   - password: secrets.GITHUB_TOKEN (auto-provided; do NOT create a PAT
+      #     for basic same-account GHCR push — GITHUB_TOKEN + packages:write is enough)
+      #
+      # OIDC note: if this were AWS ECR, we'd use aws-actions/configure-aws-credentials
+      # with role-to-assume + id-token: write instead of a long-lived AWS key.
+      # For GHCR, GITHUB_TOKEN is the simple correct path.
+      # -----------------------------------------------------------------------
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # Metadata — compute tags + labels from git context
+      # On main push we want:
+      #   - sha-<shortsha>  → immutable pin for GitOps
+      #   - latest          → convenience pointer at newest main
+      # On PR we may tag nothing for push (we use load/build only).
+      # -----------------------------------------------------------------------
+      - name: Docker metadata (tags / labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            # "latest" only on default branch pushes
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            # always produce a sha tag from the commit (useful even on PR if you push)
+            type=sha,prefix=sha-,format=short
+
+      # -----------------------------------------------------------------------
+      # BUILD (and PUSH on main)
+      #
+      # context / file: point at your existing multi-stage Dockerfile.
+      #
+      # cache-from / cache-to type=gha:
+      #   Stores BuildKit layers in GitHub Actions cache.
+      #   Next run: "pip install" layer often hits cache → huge time win.
+      #   mode=max: cache intermediate stages (builder), not only final image.
+      #
+      # push vs load:
+      #   - push:true  → send to GHCR (main only)
+      #   - On PRs we set push:false so we don't publish unmerged code as latest
+      #     We still build so a broken Dockerfile fails CI before merge.
+      #
+      # platforms: omit or leave linux/amd64 only — no matrix.
+      # -----------------------------------------------------------------------
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          # Push only from main; PRs build-only (validates Dockerfile).
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # Job 3 (optional): helm template — render chart, catch YAML/template bugs
+  # ---------------------------------------------------------------------------
+  # Does NOT talk to a cluster. Pure offline check.
+  # Delete this whole job if you want the absolute minimum Phase 5 first.
+  # ---------------------------------------------------------------------------
+  helm:
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      # helm lint = chart structure / best-practice warnings
+      - name: Helm lint
+        run: helm lint ./helm/api
+      # helm template = render final Kubernetes YAML with local values
+      # If this fails, your chart is broken even if Docker is fine.
+      - name: Helm template (local values)
+        run: helm template api ./helm/api -f ./helm/api/values-local.yaml > /tmp/api-rendered.yaml
