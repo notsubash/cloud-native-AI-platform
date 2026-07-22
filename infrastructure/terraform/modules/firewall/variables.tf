@@ -3,7 +3,7 @@ variable "name" {
 }
 
 variable "ssh_source_cidrs" {
-    type = list(string)
-    description = "Who may SSH. Our home IP/32"
-    default = ["0.0.0.0/0"] # TODO: tighten to our IP/32 before real apply
+  type        = list(string)
+  description = "Who may SSH and reach the K8s API (6443). Use your home IP/32."
+  # No wide-open default — hobby env must pass admin_cidrs explicitly.
 }

@@ -1,11 +1,10 @@
 #cloud-config
 # =============================================================================
-# Minimal cloud-init — install single-node k3s
-# =============================================================================
-# After terraform apply:
-#   ssh root@<ip>
-#   cat /etc/rancher/k3s/k3s.yaml   # this is your kubeconfig
-# On your laptop: replace 127.0.0.1 with the public IP.
+# First-boot: install single-node k3s with TLS SAN = this VPS public IP
+# so kubectl from your laptop (https://<public-ip>:6443) trusts the API cert.
+#
+# Public IP comes from Hetzner link-local metadata (no Terraform cycle needed).
+# After apply: ./scripts/fetch-hobby-kubeconfig.sh
 # =============================================================================
 
 package_update: true
@@ -14,6 +13,9 @@ packages:
   - curl
 
 runcmd:
-  # Install k3s as a single-node cluster (default Traefik + servicelb).
-  # DISABLE traefik later if you prefer nginx — for Phase 6, leave defaults.
-  - curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+  - |
+    set -e
+    PUBLIC_IP=$(curl -fsSL http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
+    curl -sfL https://get.k3s.io | sh -s - \
+      --write-kubeconfig-mode 644 \
+      --tls-san "$PUBLIC_IP"
