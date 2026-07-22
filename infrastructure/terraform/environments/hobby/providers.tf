@@ -5,6 +5,6 @@ provider "hcloud"{
     # token defaults to HCLOUD_TOKEN - so no need to hardcode
 }
 
-provider "cloudflare" {
+# provider "cloudflare" {
     # uses CLOUDFLARE_API_TOKEN when we enable the dns module
-}
+# }
