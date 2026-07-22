@@ -1,0 +1,68 @@
+# =============================================================================
+# Argo CD Application — "desired state" for our API Helm chart
+# =============================================================================
+# This is NOT a Kubernetes Deployment. It is an Argo CRD that says:
+#   "Watch this Git path, render Helm, apply into that namespace."
+#
+# After you commit this file, you either:
+#   A) kubectl apply -f gitops/applications/api.yaml   (bootstrap once)
+#   B) or create it via Argo UI pointing at the same repo/path
+#
+# From then on, CHANGES TO THE APP go through Git + Argo sync —
+# not through helm upgrade on your laptop.
+# =============================================================================
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: api
+  namespace: argocd # Applications live in Argo's namespace by default
+  # finalizer: ensures resources are deleted when the Application is deleted
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io 
+spec:
+  project: default
+
+  # -------------------------------------------------------------------------
+  # SOURCE — where desired state lives
+  # -------------------------------------------------------------------------
+  source:
+    # Your GitHub repo (HTTPS). Private repo → register credentials in Argo.
+    repoURL: https://github.com/notsubash/cloud-native-AI-platform.git
+    targetRevision: main       # branch/tag/commit Argo tracks
+    path: helm/api                # chart directory
+
+    # Tell Argo this path is a Helm chart
+    helm:
+      valueFiles:
+        - values-hobby.yaml       # cloud values (GHCR image + pull secret)
+      # Optional: override tag without editing values file
+      # parameters:
+      #   - name: image.tag
+      #     value: sha-abc1234
+
+
+  # -------------------------------------------------------------------------
+  # DESTINATION — which cluster/namespace to apply into
+  # -------------------------------------------------------------------------
+  destination:
+    server: https://kubernetes.default.svc   # "in-cluster" (Argo talks to local API)
+    namespace: ai-platform
+
+  # Create the namespace if missing
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+
+    # -----------------------------------------------------------------------
+    # Start MANUAL (safer for learning). Click Sync in UI or:
+    #   argocd app sync api
+    #
+    # Later, enable automated:
+    # automated:
+    #   prune: true      # delete resources removed from Git
+    #   selfHeal: true   # revert manual kubectl edits (drift drill)
+    # -----------------------------------------------------------------------
+    # automated:
+    #   prune: true
+    #   selfHeal: true

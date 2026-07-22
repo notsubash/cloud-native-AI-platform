@@ -10,5 +10,5 @@ output "ssh_command" {
 
 output "dns_name" {
   description = "FQDN if DNS enabled"
-  value       = var.enable_dns ? module.dns[0].fqdn : null
+  value       = null
 }

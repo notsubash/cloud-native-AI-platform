@@ -1,0 +1,41 @@
+# =============================================================================
+# values-hobby.yaml — cloud VPS
+# =============================================================================
+# Diff from values-local.yaml:
+# - image comes from GHCR (not local Docker Desktop)
+# - pullPolicy IfNotPresent (nodes pull once, then cache)
+# - imagePullSecrets so private GHCR packages work
+# =============================================================================
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/notsubash/cloud-native-ai-api
+  # Prefer immutable sha tag from CI, not "latest", for real GitOps
+  tag: latest   # first sync; then pin to sha-<short> once you verify
+  pullPolicy: IfNotPresent
+
+# Name of the Secret we create below (docker-registry type)
+imagePullSecrets:
+  - name: ghcr-pull
+
+# Non-secret config — same pattern as local, in-cluster Service DNS
+config:
+  LOG_LEVEL: "INFO"
+  LLM_MODE: "stub"
+  DATABASE_URL: "postgresql+psycopg://app:app@postgres:5432/app"
+  REDIS_URL: "redis://redis:6379/0"
+
+secret:
+  create: true
+  POSTGRES_USER: "app"
+  POSTGRES_PASSWORD: "app"   # Todo: Sealed Secrets / SOPS — not plaintext forever
+  POSTGRES_DB: "app"
+  DEEPSEEK_API_KEY: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
