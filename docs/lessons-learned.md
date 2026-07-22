@@ -50,13 +50,13 @@ Do not run `make up` (Compose) alongside the K8s stack. Access the API with `kub
 
 Owned the API as `helm/api` (Chart.yaml, values, templates, helpers, NOTES) and left Postgres/Redis to Bitnami — own app charts, consume mature data-store charts.
 
-`values-local.yaml` is the local knob file: `pullPolicy: Never`, stub LLM, tiny resources, and Bitnami Service DNS (`postgres-postgresql`, `redis-master`). Defaults in `values.yaml` stay closer to Phase 3 names; local overrides win with `-f`.
+`values-local.yaml` is the local knob file: `pullPolicy: Never`, stub LLM, tiny resources, and Bitnami Service DNS (`postgres-postgresql`, `redis-master`). Defaults in `values.yaml` stay closer to the raw `kubernetes/base` names; local overrides win with `-f`.
 
 Proved the exit checklist: `helm upgrade ... --set image.tag=local-v2` moved the pod image; `helm rollback api 1` restored `cloud-native-ai-api:local` and wrote a new history revision (rollback is a new revision, not a rewind of the list).
 
 Service DNS still bites after switching charts: Bitnami release `postgres` → Service `postgres-postgresql`, Redis standalone → `redis-master`. Wrong host → `/ready` fails even when pods look fine.
 
-Do not run Phase 3 raw `api`/`postgres`/`redis` next to Helm/Bitnami in the same namespace — two Deployments fight for the same mental model. Pick one path: today that path is Bitnami + `helm/api`.
+Do not run raw `api`/`postgres`/`redis` manifests next to Helm/Bitnami in the same namespace — two Deployments fight for the same mental model. Pick one path: today that path is Bitnami + `helm/api` locally, and Argo + `values-hobby.yaml` on the VPS.
 
 `helm template` before `install` caught path typos (`./help/...`); `helm lint` + rendered YAML beat debugging CrashLoops from bad templates.
 
@@ -72,4 +72,22 @@ GHCR auth is `GITHUB_TOKEN` + `packages: write` on the build job only — no PAT
 
 Buildx + `cache-from` / `cache-to type=gha,mode=max` stores builder layers in GitHub Actions cache — first run cold (~0% cached), later runs reuse pip/install layers. The `.dockerbuild` artifact is a Buildx record, not a published package.
 
-CI produces images; it does not deploy. Helm values still point at local tags for laptop work — wiring `image.repository` to `ghcr.io/<owner>/cloud-native-ai-api` and `pullPolicy: IfNotPresent` is Phase 6 (GitOps on the VPS), not something to bolt onto Actions with `kubectl apply`.
+CI produces images; it does not deploy. Laptop Helm keeps local tags; cloud wiring (`ghcr.io/...`, `pullPolicy: IfNotPresent`, `imagePullSecrets`) lives in `values-hobby.yaml` and is applied by Argo — not bolted onto Actions with `kubectl apply`.
+
+## Hobby cloud & GitOps (Hetzner + k3s + Argo CD)
+
+Applied Terraform for real: Hetzner CX23 (`cnai-hobby`), firewall, cloud-init → single-node k3s. Billing starts at `apply`; the only reliable off switch is `terraform destroy` (console power-off still charges for the reserved server).
+
+Cloudflare provider still configures even when DNS is disabled — empty `provider "cloudflare" {}` demands a token and can pull a breaking provider major. For hobby without DNS: leave Cloudflare out of the apply path entirely (comment provider + DNS module) until you need records.
+
+Copied kubeconfig from the **laptop** with `scp root@<ip>:... ~/.kube/hobby.yaml`, then replaced `127.0.0.1` with the public IP. Running `scp` while already SSH’d into the VPS targets the server itself and fails (key-only auth, wrong destination).
+
+Argo install: prefer `kubectl apply --server-side` — client-side apply blows the last-applied annotation size limit on large CRDs (ApplicationSet). Core `Application` still works; finish install with server-side / `--force-conflicts` if needed.
+
+GitOps only sees what GitHub has. Local branch + uncommitted `values-hobby.yaml` → Argo errors like “unable to resolve revision” or missing values file. Commit, push, then Sync.
+
+`ghcr-pull` must be a docker-registry Secret whose password is a GitHub PAT (`read:packages`). An image tag like `sha-...` is not a password — that mistake yields `ImagePullBackOff` after a “healthy” Application.
+
+Kept sync **manual** at first: applying the Application CR registers desired state; pods appear after Sync. Automate prune/selfHeal later once the loop feels boring.
+
+Firewall `ssh_source_cidrs` is a single home IP `/32`. Café/VPN IP changes look like “SSH hang” — update Terraform and re-apply before debugging k3s.

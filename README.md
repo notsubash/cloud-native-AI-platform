@@ -1,6 +1,6 @@
 # Cloud Native AI Platform
 
-A cost-bounded platform for a minimal AI summarization API, built with production-oriented patterns: multi-stage containers, Kubernetes probes, Helm packaging, Terraform foundations, and GitHub Actions publishing immutable images to GHCR.
+A cost-bounded platform for a minimal AI summarization API, built with production-oriented patterns: multi-stage containers, Kubernetes probes, Helm packaging, Terraform foundations, GitHub Actions publishing immutable images to GHCR, and Argo CD GitOps on a Hetzner VPS.
 
 Monthly spend is capped at **$15**. See [docs/cost-budget.md](docs/cost-budget.md).
 
@@ -10,45 +10,143 @@ Monthly spend is capped at **$15**. See [docs/cost-budget.md](docs/cost-budget.m
 |-------|--------|-----------|
 | API + local dev | Done | FastAPI (`/health`, `/ready`, `/metrics`, `POST /v1/summarize`), Compose, golden-path tests |
 | Container image | Done | Multi-stage Dockerfile, non-root runtime |
-| Terraform (hobby) | Scaffolded | Hetzner modules + hobby env; not applied until a VPS is needed |
+| Terraform (hobby) | Done | Hetzner CX22 VPS (`cnai-hobby`) + firewall; k3s via cloud-init |
 | Kubernetes (local) | Done | `kubernetes/base`, liveness/readiness probes. [Runbook](docs/runbooks/app-wont-start.md) |
 | Helm | Done | `helm/api` + Bitnami Postgres/Redis. [Runbook](docs/runbooks/helm.md) |
 | CI / registry | Done | GitHub Actions: test → build → push to GHCR on `main` |
-| GitOps / cloud deploy | Next | Argo CD + VPS |
+| GitOps / cloud deploy | Done | Argo CD on k3s; Application watches `helm/api` + `values-hobby.yaml` |
 
-Operational notes: [docs/lessons-learned.md](docs/lessons-learned.md).
+Operational notes: [docs/lessons-learned.md](docs/lessons-learned.md). GitOps details: [gitops/README.md](gitops/README.md).
 
 ## Architecture
 
 ```
 Client → FastAPI (apps/api) → PostgreSQL
                           └→ Redis
+
+GitHub (main) → GHCR image
+             └→ Argo CD (k3s on Hetzner) → Helm release in ai-platform
 ```
 
 The API exposes standard health and metrics endpoints. LLM calls go through a single `summarize()` abstraction: `stub` in tests/CI, `deepseek` via OpenAI-compatible HTTP when configured. Liveness (`/health`) stays cheap; readiness (`/ready`) gates traffic until Postgres and Redis are reachable.
+
+On the hobby VPS, desired state lives in Git. Argo CD renders the Helm chart and applies it in-cluster — you do not `helm upgrade` from the laptop for cloud deploys.
+
+## Live stack (hobby)
+
+Hetzner VPS `cnai-hobby` (Nuremberg) — ~$6.49/mo while it exists:
+
+![Hetzner hobby VPS running](assets/server_running.png)
+
+Argo CD managing the `api` Application (Healthy, path `helm/api`, namespace `ai-platform`):
+
+![Argo CD Applications dashboard](assets/argo.png)
 
 ## Repository layout
 
 ```
 apps/api/              FastAPI service, Dockerfile, tests
 kubernetes/base/       Raw Kustomize manifests
-helm/api/              Application Helm chart
+helm/api/              Application Helm chart (values-local + values-hobby)
+gitops/                Argo CD Application manifests
 infrastructure/        Terraform modules + hobby environment
 .github/workflows/     CI pipeline
 docs/                  Runbooks, architecture, cost budget
+assets/                Screenshots referenced from this README
 ```
 
 ## Deployment options
 
-Pick **one** local stack. Do not run Compose and a cluster side by side.
-
 | Goal | Path |
 |------|------|
-| Fastest dev loop | Docker Compose (below) |
+| Fastest local loop | Docker Compose (below) |
 | Learn raw K8s objects | `kubectl apply -k kubernetes/base` |
-| Day-to-day cluster work | Helm + Bitnami. [Runbook](docs/runbooks/helm.md) |
+| Day-to-day local cluster | Helm + Bitnami. [Runbook](docs/runbooks/helm.md) |
+| Cloud (hobby VPS) | Terraform → k3s → Argo CD. [gitops/README.md](gitops/README.md) |
 
-Cloud infrastructure (`infrastructure/terraform/environments/hobby`) stays offline until a VPS is required.
+Do not run Compose and a local cluster side by side. Cloud work uses the VPS kubeconfig (`~/.kube/hobby.yaml`), not Docker Desktop.
+
+## Pause, resume, and cost control
+
+The VPS is the only recurring bill (~$6–7/mo). GHCR, GitHub Actions free tier, Argo CD, and k3s are $0. Keep the monthly total under **$15**.
+
+### Closing for the day (pick one)
+
+| Intent | Action | Still billed? |
+|--------|--------|----------------|
+| Short break (hours / overnight) | Hetzner console → power **OFF** on `cnai-hobby` | **Yes** — disk/server reservation still charges |
+| Pause multi-day / keep spend flat | `terraform destroy` in `infrastructure/terraform/environments/hobby` | **No** — this is the real off switch |
+| Pause > 7 days | Always `terraform destroy` (see [docs/cost-budget.md](docs/cost-budget.md)) | No |
+
+Powering off is convenient but **does not stop the meter**. Deleting the server (Terraform destroy or Hetzner Delete) does.
+
+Before destroy: nothing unique should live only on the box — Git + GHCR are source of truth. After destroy, note spend in [docs/cost-budget.md](docs/cost-budget.md).
+
+```bash
+cd infrastructure/terraform/environments/hobby
+export HCLOUD_TOKEN=...   # Hetzner API token
+terraform destroy
+```
+
+### Opening again (same machine, VPS still exists)
+
+1. Hetzner console → power **ON** if you powered off.
+2. Confirm your public IP still matches the firewall allow-list in `main.tf` (`ssh_source_cidrs`). If your ISP changed it, update the CIDR and `terraform apply` before SSH will work.
+3. Point kubectl at the hobby cluster and verify:
+
+```bash
+export KUBECONFIG=~/.kube/hobby.yaml
+kubectl get nodes
+kubectl -n argocd get pods
+kubectl -n argocd port-forward svc/argocd-server 8080:443
+# UI: https://localhost:8080
+```
+
+### Fresh device → back to the current point
+
+You need: this repo, your SSH **private** key (same key Terraform registered), `HCLOUD_TOKEN`, a GitHub PAT with `read:packages`, and either (A) the existing VPS still running or (B) a willingness to recreate it.
+
+**A — VPS still running (cheaper resume)**
+
+```bash
+git clone https://github.com/notsubash/cloud-native-AI-platform.git
+cd cloud-native-AI-platform
+
+# Laptop only — do not run scp while SSH'd into the VPS
+mkdir -p ~/.kube
+scp -i ~/.ssh/id_ed25519 root@<VPS_IP>:/etc/rancher/k3s/k3s.yaml ~/.kube/hobby.yaml
+# Edit hobby.yaml: replace 127.0.0.1 with <VPS_IP>
+
+export KUBECONFIG=~/.kube/hobby.yaml
+kubectl get nodes
+
+# Argo UI
+kubectl -n argocd port-forward svc/argocd-server 8080:443
+```
+
+If you lack Terraform state on the new machine, manage the existing server from the Hetzner console (or copy `*.tfstate` from the old laptop). Do not `terraform apply` blindly — it may try to create a second billable server.
+
+**B — Recreate from zero (after destroy, or no state)**
+
+```bash
+cd infrastructure/terraform/environments/hobby
+cp terraform.tfvars.example terraform.tfvars   # set ssh_public_key_path
+export HCLOUD_TOKEN=...
+# Update ssh_source_cidrs in main.tf to YOUR current public IP/32
+terraform init && terraform plan && terraform apply
+
+# Wait ~2–3 min for cloud-init/k3s, then copy kubeconfig (see A)
+# Install Argo CD (server-side apply), create ghcr-pull secret, apply gitops/applications/api.yaml
+# Full sequence: gitops/README.md
+```
+
+### Cost hygiene checklist
+
+- [ ] Before leaving for the day: power off **or** destroy (know which you chose).
+- [ ] If paused > 7 days: destroy, don’t leave an idle ON server.
+- [ ] After destroy: confirm Hetzner console shows **no** `cnai-hobby` server.
+- [ ] Never commit `HCLOUD_TOKEN`, `terraform.tfvars`, `*.tfstate`, or the GHCR PAT.
+- [ ] Firewall is IP-locked — a new network/café IP blocks SSH until you update `ssh_source_cidrs`.
 
 ## Local development (Compose)
 
@@ -86,6 +184,12 @@ helm history api -n ai-platform
 
 Full sequence, DNS notes, and tear-down: [docs/runbooks/helm.md](docs/runbooks/helm.md).
 
+## GitOps (hobby cloud)
+
+Desired state: [gitops/applications/api.yaml](gitops/applications/api.yaml) → chart `helm/api` with [helm/api/values-hobby.yaml](helm/api/values-hobby.yaml) (GHCR image + `ghcr-pull` secret).
+
+App changes go through Git + Argo Sync — not `helm upgrade` on the laptop. Bootstrap, sync, and drift notes: [gitops/README.md](gitops/README.md).
+
 ## CI / container registry
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pull requests and pushes to `main`:
@@ -105,7 +209,7 @@ gh auth token | docker login ghcr.io -u <owner> --password-stdin
 docker pull ghcr.io/<owner>/cloud-native-ai-api:sha-<commit>
 ```
 
-PR builds validate the Dockerfile without publishing. Deploy wiring to GHCR images is handled by GitOps, not in CI.
+PR builds validate the Dockerfile without publishing. Cloud deploys consume GHCR via Argo + `values-hobby.yaml`.
 
 ## Image build
 
