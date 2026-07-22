@@ -29,7 +29,7 @@ spec:
   source:
     # Your GitHub repo (HTTPS). Private repo → register credentials in Argo.
     repoURL: https://github.com/notsubash/cloud-native-AI-platform.git
-    targetRevision: learn/cloud-and-gitops        # branch/tag/commit Argo tracks
+    targetRevision: main       # branch/tag/commit Argo tracks
     path: helm/api                # chart directory
 
     # Tell Argo this path is a Helm chart
