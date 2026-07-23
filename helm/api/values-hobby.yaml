@@ -23,8 +23,8 @@ imagePullSecrets:
 config:
   LOG_LEVEL: "INFO"
   LLM_MODE: "stub"
-  DATABASE_URL: "postgresql+psycopg://app:app@postgres:5432/app"
-  REDIS_URL: "redis://redis:6379/0"
+  DATABASE_URL: "postgresql+psycopg://app:app@postgres-postgresql:5432/app"
+  REDIS_URL: "redis://redis-master:6379/0"
 
 secret:
   create: true
