@@ -1,0 +1,77 @@
+# =============================================================================
+# kube-prometheus-stack — HOBBY / small VPS profile
+# =============================================================================
+# Install (from laptop, kubeconfig pointing at hobby k3s):
+#
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   kubectl create namespace monitoring
+#   helm upgrade --install mon prometheus-community/kube-prometheus-stack \
+#     -n monitoring -f monitoring/kube-prometheus-stack-values.yaml
+#
+# UI access while learning (no Ingress yet — Phase 10):
+#   kubectl -n monitoring port-forward svc/mon-grafana 3000:80
+#   # admin password: kubectl get secret -n monitoring mon-grafana \
+#   #   -o jsonpath='{.data.admin-password}' | base64 -d; echo
+#
+# WHY these knobs: one node, 4–8 GB RAM. Observability must not starve the API.
+# =============================================================================
+
+# Grafana: keep defaults; change password in secret later (Phase 9)
+grafana:
+  # Single replica is enough for a lab
+  replicas: 1
+  # Persistence is nice but optional on a throwaway VPS; emptyDir loses dashboards on restart
+  persistence:
+    enabled: false
+  # Don't install a zoo of plugins — RAM + image size
+  plugins: []
+
+prometheus:
+  prometheusSpec:
+    # How long to keep samples. Shorter = less disk + less memory pressure.
+    retention: 3d
+    # Scrape every 30s is fine for learning (15s is noisier / heavier)
+    scrapeInterval: 30s
+    # Cap resources so Prometheus can't eat the node
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 768Mi
+    # Storage: emptyDir or tiny PVC. On single-node k3s, local-path PVC is fine.
+    storageSpec: {}
+    # Enable ServiceMonitor discovery in all namespaces (so ai-platform API is scraped)
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests:
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+
+# Node exporter + kube-state-metrics are useful and relatively cheap — keep them.
+# If you OOM later, you can disable optional components, not these first.
+
+# Example: turn off unused bits if chart version exposes them
+# (names vary slightly by chart version — check `helm show values`)
+prometheus-node-exporter:
+  resources:
+    requests:
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      memory: 64Mi
+    limits:
+      memory: 128Mi

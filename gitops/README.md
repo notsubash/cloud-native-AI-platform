@@ -18,14 +18,19 @@ GitHub (branch in Application) → Argo CD → Helm (helm/api + values-hobby.yam
 
 ## Prerequisites (cluster already up)
 
-- Hobby VPS with k3s (Terraform + cloud-init)
-- `KUBECONFIG` pointing at the VPS (e.g. `~/.kube/hobby.yaml` with `127.0.0.1` replaced by the public IP)
+- Hobby VPS with k3s (Terraform + cloud-init; API cert includes public IP via `--tls-san`)
+- Firewall allows your IP on **22** and **6443** (`admin_cidrs` in `terraform.tfvars`)
+- Laptop kubeconfig from `./scripts/fetch-hobby-kubeconfig.sh` → `export KUBECONFIG=~/.kube/hobby.yaml`
 - Argo CD installed in namespace `argocd`
 - Namespace `ai-platform` and docker-registry secret `ghcr-pull` (GitHub PAT with `read:packages` — not an image tag)
 
 ## Bootstrap Argo CD (once per cluster)
 
 ```bash
+# From repo root, after terraform apply:
+./scripts/fetch-hobby-kubeconfig.sh
+export KUBECONFIG=~/.kube/hobby.yaml
+
 kubectl create namespace argocd
 kubectl apply --server-side -n argocd \
   -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
@@ -83,7 +88,8 @@ Automated sync / self-heal can be enabled later in `api.yaml` (`syncPolicy.autom
 | `values-hobby.yaml: no such file` | File not on the tracked revision / not committed |
 | Sync OK but `ImagePullBackOff` | Bad `ghcr-pull` secret (need PAT with `read:packages`) |
 | Application Healthy but empty namespace | Manual sync not run yet |
-| SSH to VPS hangs | Your public IP changed; update `ssh_source_cidrs` in Terraform |
+| SSH to VPS hangs / kubectl :6443 times out | Your public IP changed; update `admin_cidrs` in `terraform.tfvars` + `terraform apply` |
+| Host key verification failed after recreate | Normal after destroy/recreate; `./scripts/fetch-hobby-kubeconfig.sh` clears the old key |
 
 ## Cost note
 

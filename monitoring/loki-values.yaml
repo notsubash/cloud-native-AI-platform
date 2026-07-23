@@ -1,0 +1,53 @@
+# =============================================================================
+# Grafana Loki — single-binary / monomorphic mode for tiny clusters
+# =============================================================================
+# Chart: grafana/loki (check current chart docs; modes change over versions)
+#
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm upgrade --install loki grafana/loki -n monitoring -f monitoring/loki-values.yaml
+#
+# Teaching idea: Loki indexes LABELS, not full-text like ES.
+# Good labels: namespace, app, pod. Bad labels: request_id (cardinality!).
+# Put request_id IN the log line body; filter with |= "request_id=abc".
+# =============================================================================
+
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    retention_period: 72h   # 3 days — matches cost tactics in PLAN.md
+
+singleBinary:
+  replicas: 1
+  resources:
+    requests:
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+# Disable distributed components if the chart enables them by default
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
+
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false

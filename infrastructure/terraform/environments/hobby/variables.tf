@@ -23,6 +23,11 @@ variable "ssh_public_key_path" {
   description = "Path to our public key file (contents get uploaded to Hetzner)"
 }
 
+variable "admin_cidrs" {
+  type        = list(string)
+  description = "Your public IP(s) as /32 — SSH (22) and kubectl API (6443). Find IP: curl -4 ifconfig.me"
+}
+
 variable "enable_dns" {
   type        = bool
   description = "Wire Cloudflare DNS? Keep false until later"

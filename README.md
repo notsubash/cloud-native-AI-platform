@@ -91,11 +91,11 @@ terraform destroy
 ### Opening again (same machine, VPS still exists)
 
 1. Hetzner console → power **ON** if you powered off.
-2. Confirm your public IP still matches the firewall allow-list in `main.tf` (`ssh_source_cidrs`). If your ISP changed it, update the CIDR and `terraform apply` before SSH will work.
+2. Confirm your public IP still matches `admin_cidrs` in `terraform.tfvars`. If your ISP changed it, update and `terraform apply` before SSH/kubectl will work (`curl -4 ifconfig.me`).
 3. Point kubectl at the hobby cluster and verify:
 
 ```bash
-export KUBECONFIG=~/.kube/hobby.yaml
+./scripts/fetch-hobby-kubeconfig.sh   # or: export KUBECONFIG=~/.kube/hobby.yaml
 kubectl get nodes
 kubectl -n argocd get pods
 kubectl -n argocd port-forward svc/argocd-server 8080:443
@@ -112,13 +112,8 @@ You need: this repo, your SSH **private** key (same key Terraform registered), `
 git clone https://github.com/notsubash/cloud-native-AI-platform.git
 cd cloud-native-AI-platform
 
-# Laptop only — do not run scp while SSH'd into the VPS
-mkdir -p ~/.kube
-scp -i ~/.ssh/id_ed25519 root@<VPS_IP>:/etc/rancher/k3s/k3s.yaml ~/.kube/hobby.yaml
-# Edit hobby.yaml: replace 127.0.0.1 with <VPS_IP>
-
-export KUBECONFIG=~/.kube/hobby.yaml
-kubectl get nodes
+./scripts/fetch-hobby-kubeconfig.sh
+# needs terraform state (or set IP manually — see script / terraform output)
 
 # Argo UI
 kubectl -n argocd port-forward svc/argocd-server 8080:443
@@ -130,23 +125,26 @@ If you lack Terraform state on the new machine, manage the existing server from 
 
 ```bash
 cd infrastructure/terraform/environments/hobby
-cp terraform.tfvars.example terraform.tfvars   # set ssh_public_key_path
+cp terraform.tfvars.example terraform.tfvars
+# set ssh_public_key_path + admin_cidrs = ["YOUR.IP/32"]  (curl -4 ifconfig.me)
 export HCLOUD_TOKEN=...
-# Update ssh_source_cidrs in main.tf to YOUR current public IP/32
 terraform init && terraform plan && terraform apply
 
-# Wait ~2–3 min for cloud-init/k3s, then copy kubeconfig (see A)
+# from repo root — waits for k3s, writes ~/.kube/hobby.yaml with public IP
+./scripts/fetch-hobby-kubeconfig.sh
+
 # Install Argo CD (server-side apply), create ghcr-pull secret, apply gitops/applications/api.yaml
 # Full sequence: gitops/README.md
 ```
 
+Firewall allows **SSH (22)** and **kubectl (6443)** only from `admin_cidrs`. No SSH tunnel needed when your IP matches.
 ### Cost hygiene checklist
 
 - [ ] Before leaving for the day: power off **or** destroy (know which you chose).
 - [ ] If paused > 7 days: destroy, don’t leave an idle ON server.
 - [ ] After destroy: confirm Hetzner console shows **no** `cnai-hobby` server.
 - [ ] Never commit `HCLOUD_TOKEN`, `terraform.tfvars`, `*.tfstate`, or the GHCR PAT.
-- [ ] Firewall is IP-locked — a new network/café IP blocks SSH until you update `ssh_source_cidrs`.
+- [ ] Firewall is IP-locked — a new network/café IP blocks SSH/kubectl until you update `admin_cidrs` in `terraform.tfvars` and apply.
 
 ## Local development (Compose)
 

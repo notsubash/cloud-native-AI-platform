@@ -1,0 +1,40 @@
+# =============================================================================
+# PrometheusRule — high-level alert for the learning lab
+# =============================================================================
+# Apply after kube-prometheus-stack is installed (CRDs must exist):
+#   kubectl apply -f monitoring/alerts/api-rules.yaml
+#
+# Or fold into GitOps later as its own Application / Helm extraObjects.
+#
+# Flow:
+#   Prometheus evaluates expr every evaluation interval
+#   → if true for `for:` duration, alert becomes FIRING
+#   → Alertmanager routes to a receiver (webhook / null for lab)
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: api-health
+  namespace: monitoring
+  labels:
+    # Must match Prometheus ruleSelector; with our values (NilUsesHelmValues=false)
+    # any label usually works. Some installs expect release: mon
+    release: mon
+spec:
+  groups:
+    - name: api.rules
+      rules:
+        - alert: ApiHighErrorRate
+          # More than ~5% 5xx over 5m window, sustained for 2m
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="ai-platform",status=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(http_requests_total{namespace="ai-platform"}[5m])), 0.001)
+            ) > 0.05
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "API 5xx rate is high"
+            description: "Error ratio > 5% for 2m. Check Grafana RED + Loki for request_id."
