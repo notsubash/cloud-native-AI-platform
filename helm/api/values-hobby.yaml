@@ -12,7 +12,7 @@ replicaCount: 1
 image:
   repository: ghcr.io/notsubash/cloud-native-ai-api
   # Prefer immutable sha tag from CI, not "latest", for real GitOps
-  tag: sha-b6b8bd1  # first sync; then pin to sha-<short> once you verify
+  tag: sha-701186a  # first sync; then pin to sha-<short> once you verify
   pullPolicy: IfNotPresent
 
 # Name of the Secret we create below (docker-registry type)
