@@ -91,3 +91,15 @@ GitOps only sees what GitHub has. Local branch + uncommitted `values-hobby.yaml`
 Kept sync **manual** at first: applying the Application CR registers desired state; pods appear after Sync. Automate prune/selfHeal later once the loop feels boring.
 
 Firewall `ssh_source_cidrs` is a single home IP `/32`. Café/VPN IP changes look like “SSH hang” — update Terraform and re-apply before debugging k3s.
+
+## Observability (Phase 7)
+
+Installed kube-prometheus-stack **before** expecting Argo to sync a `ServiceMonitor`. SyncFailed with “could not find monitoring.coreos.com/ServiceMonitor” means the Prometheus Operator CRDs are missing — consumer before provider. Fix: Helm install `mon`, then Sync `api`.
+
+Git having RED middleware + `/debug/boom` is not enough: the **running** GHCR tag must include that commit. Symptoms of an old image: `/debug/boom` → 404 and `/metrics` only shows `summarize_requests_total` (no `http_requests_total`). Pin `sha-...` from a build after the observability commit, Sync, restart if needed.
+
+Loki alone stores nothing useful; Promtail (or Alloy) must ship stdout. Wrong Promtail client URL → silent empty Grafana Explore until `kubectl -n monitoring get svc` matches the push endpoint.
+
+Kept the stack right-sized (3d retention, 30s scrape, single replicas). Diagnosis drill that matters for interviews: force 500 with a known `X-Request-ID` → PromQL error rate → Loki `|= "request_id=..."` → optional Alertmanager `ApiHighErrorRate`.
+
+One place for ports/charts/namespaces: `docs/runbooks/hobby-stack.md`. Monitoring how-to: `monitoring/README.md`.

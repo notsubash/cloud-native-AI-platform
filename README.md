@@ -1,8 +1,10 @@
 # Cloud Native AI Platform
 
-A cost-bounded platform for a minimal AI summarization API, built with production-oriented patterns: multi-stage containers, Kubernetes probes, Helm packaging, Terraform foundations, GitHub Actions publishing immutable images to GHCR, and Argo CD GitOps on a Hetzner VPS.
+A cost-bounded platform for a minimal AI summarization API, built with production-oriented patterns: multi-stage containers, Kubernetes probes, Helm packaging, Terraform foundations, GitHub Actions publishing immutable images to GHCR, Argo CD GitOps on a Hetzner VPS, and right-sized observability (Prometheus, Grafana, Loki).
 
 Monthly spend is capped at **$15**. See [docs/cost-budget.md](docs/cost-budget.md).
+
+**Start-to-finish hobby map** (namespaces, charts, every port-forward): [docs/runbooks/hobby-stack.md](docs/runbooks/hobby-stack.md).
 
 ## Platform status
 
@@ -10,13 +12,14 @@ Monthly spend is capped at **$15**. See [docs/cost-budget.md](docs/cost-budget.m
 |-------|--------|-----------|
 | API + local dev | Done | FastAPI (`/health`, `/ready`, `/metrics`, `POST /v1/summarize`), Compose, golden-path tests |
 | Container image | Done | Multi-stage Dockerfile, non-root runtime |
-| Terraform (hobby) | Done | Hetzner CX22 VPS (`cnai-hobby`) + firewall; k3s via cloud-init |
+| Terraform (hobby) | Done | Hetzner VPS (`cnai-hobby`) + firewall; k3s via cloud-init |
 | Kubernetes (local) | Done | `kubernetes/base`, liveness/readiness probes. [Runbook](docs/runbooks/app-wont-start.md) |
 | Helm | Done | `helm/api` + Bitnami Postgres/Redis. [Runbook](docs/runbooks/helm.md) |
 | CI / registry | Done | GitHub Actions: test → build → push to GHCR on `main` |
 | GitOps / cloud deploy | Done | Argo CD on k3s; Application watches `helm/api` + `values-hobby.yaml` |
+| Observability | Done | kube-prometheus-stack, Loki, Promtail, ServiceMonitor, RED metrics, alert. [monitoring/README.md](monitoring/README.md) |
 
-Operational notes: [docs/lessons-learned.md](docs/lessons-learned.md). GitOps details: [gitops/README.md](gitops/README.md).
+Operational notes: [docs/lessons-learned.md](docs/lessons-learned.md). GitOps: [gitops/README.md](gitops/README.md). Architecture: [docs/architecture.md](docs/architecture.md).
 
 ## Architecture
 
@@ -26,21 +29,44 @@ Client → FastAPI (apps/api) → PostgreSQL
 
 GitHub (main) → GHCR image
              └→ Argo CD (k3s on Hetzner) → Helm release in ai-platform
+
+API /metrics → Prometheus → Grafana (RED)
+API logs     → Promtail → Loki → Grafana
 ```
 
 The API exposes standard health and metrics endpoints. LLM calls go through a single `summarize()` abstraction: `stub` in tests/CI, `deepseek` via OpenAI-compatible HTTP when configured. Liveness (`/health`) stays cheap; readiness (`/ready`) gates traffic until Postgres and Redis are reachable.
 
-On the hobby VPS, desired state lives in Git. Argo CD renders the Helm chart and applies it in-cluster — you do not `helm upgrade` from the laptop for cloud deploys.
+On the hobby VPS, desired state for the API lives in Git. Argo CD renders the Helm chart and applies it in-cluster — you do not `helm upgrade` the API from the laptop for cloud deploys. Monitoring charts are installed with Helm into `monitoring` (see [monitoring/README.md](monitoring/README.md)).
 
 ## Live stack (hobby)
 
-Hetzner VPS `cnai-hobby` (Nuremberg) — ~$6.49/mo while it exists:
+Hetzner VPS `cnai-hobby` — billed while it exists (~$5–12/mo depending on plan):
 
 ![Hetzner hobby VPS running](assets/server_running.png)
 
 Argo CD managing the `api` Application (Healthy, path `helm/api`, namespace `ai-platform`):
 
 ![Argo CD Applications dashboard](assets/argo.png)
+
+Grafana (kube-prometheus-stack) — dashboards and Explore for metrics/logs:
+
+![Grafana](assets/grafana.png)
+
+Prometheus scraping cluster and app targets (API ServiceMonitor must show **UP**):
+
+![Prometheus](assets/prometheus.png)
+
+Prometheus alert rules (e.g. `ApiHighErrorRate`):
+
+![Prometheus alerts](assets/prometheus-alerts.png)
+
+Alertmanager receiving firings:
+
+![Alertmanager](assets/alertmanager.png)
+
+Loki + Promtail — filter API logs by `request_id` after a forced 500:
+
+![Loki logs](assets/loki-logs.png)
 
 ## Repository layout
 
@@ -49,9 +75,10 @@ apps/api/              FastAPI service, Dockerfile, tests
 kubernetes/base/       Raw Kustomize manifests
 helm/api/              Application Helm chart (values-local + values-hobby)
 gitops/                Argo CD Application manifests
+monitoring/            Prometheus/Loki/Promtail values, alerts, RED dashboard
 infrastructure/        Terraform modules + hobby environment
 .github/workflows/     CI pipeline
-docs/                  Runbooks, architecture, cost budget
+docs/                  Runbooks, architecture, cost budget, lessons learned
 assets/                Screenshots referenced from this README
 ```
 
@@ -62,13 +89,13 @@ assets/                Screenshots referenced from this README
 | Fastest local loop | Docker Compose (below) |
 | Learn raw K8s objects | `kubectl apply -k kubernetes/base` |
 | Day-to-day local cluster | Helm + Bitnami. [Runbook](docs/runbooks/helm.md) |
-| Cloud (hobby VPS) | Terraform → k3s → Argo CD. [gitops/README.md](gitops/README.md) |
+| Cloud (hobby VPS) | Terraform → k3s → Argo CD → monitoring. [hobby-stack.md](docs/runbooks/hobby-stack.md) |
 
 Do not run Compose and a local cluster side by side. Cloud work uses the VPS kubeconfig (`~/.kube/hobby.yaml`), not Docker Desktop.
 
 ## Pause, resume, and cost control
 
-The VPS is the only recurring bill (~$6–7/mo). GHCR, GitHub Actions free tier, Argo CD, and k3s are $0. Keep the monthly total under **$15**.
+The VPS is the only recurring bill (~$6–7/mo typical). GHCR, GitHub Actions free tier, Argo CD, and k3s are $0. Keep the monthly total under **$15**.
 
 ### Closing for the day (pick one)
 
@@ -133,11 +160,12 @@ terraform init && terraform plan && terraform apply
 # from repo root — waits for k3s, writes ~/.kube/hobby.yaml with public IP
 ./scripts/fetch-hobby-kubeconfig.sh
 
-# Install Argo CD (server-side apply), create ghcr-pull secret, apply gitops/applications/api.yaml
-# Full sequence: gitops/README.md
+# Install Argo CD, ghcr-pull, api Application — gitops/README.md
+# Postgres/Redis + monitoring — docs/runbooks/hobby-stack.md
 ```
 
 Firewall allows **SSH (22)** and **kubectl (6443)** only from `admin_cidrs`. No SSH tunnel needed when your IP matches.
+
 ### Cost hygiene checklist
 
 - [ ] Before leaving for the day: power off **or** destroy (know which you chose).
@@ -187,6 +215,18 @@ Full sequence, DNS notes, and tear-down: [docs/runbooks/helm.md](docs/runbooks/h
 Desired state: [gitops/applications/api.yaml](gitops/applications/api.yaml) → chart `helm/api` with [helm/api/values-hobby.yaml](helm/api/values-hobby.yaml) (GHCR image + `ghcr-pull` secret).
 
 App changes go through Git + Argo Sync — not `helm upgrade` on the laptop. Bootstrap, sync, and drift notes: [gitops/README.md](gitops/README.md).
+
+## Observability
+
+| Signal | Stack |
+|--------|--------|
+| Metrics | kube-prometheus-stack + API `ServiceMonitor` + RED dashboard |
+| Logs | Loki + Promtail (`request_id` correlation) |
+| Alerts | `monitoring/alerts/api-rules.yaml` → Alertmanager |
+
+Install order, port-forwards, and “find a failed request” drill: [monitoring/README.md](monitoring/README.md).
+
+Import RED dashboard: Grafana → Dashboards → Import → `monitoring/dashboards/api-red.json`.
 
 ## CI / container registry
 

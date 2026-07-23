@@ -94,3 +94,8 @@ Automated sync / self-heal can be enabled later in `api.yaml` (`syncPolicy.autom
 ## Cost note
 
 Argo and k3s are free. The Hetzner VPS is the bill. Power-off still charges; `terraform destroy` stops billing. See the pause/resume section in the root [README.md](../README.md).
+
+## Related
+
+- Full hobby map (Postgres, Redis, monitoring, all port-forwards): [docs/runbooks/hobby-stack.md](../docs/runbooks/hobby-stack.md)
+- Observability install + drill: [monitoring/README.md](../monitoring/README.md)

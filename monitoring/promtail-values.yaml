@@ -1,0 +1,31 @@
+# =============================================================================
+# Promtail — ships container logs to Loki
+# =============================================================================
+# Install:
+#   helm upgrade --install promtail grafana/promtail \
+#     -n monitoring -f monitoring/promtail-values.yaml --wait
+#
+# Teaching:
+# - Runs as a DaemonSet (one pod per node). On single-node k3s = 1 pod.
+# - Tails /var/log/containers/*.log (what kubectl logs shows).
+# - Pushes to Loki. Grafana queries Loki — not Promtail.
+#
+# IMPORTANT: after install, confirm the client URL matches:
+#   kubectl -n monitoring get svc | grep loki
+# If your service is "loki" on 3100 (not gateway), use that URL instead.
+# =============================================================================
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+config:
+  # Where to send logs
+  clients:
+    # Prefer gateway if it exists; else use: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+    - url: http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push
+
+  # Default scrape configs from the chart already collect K8s pod logs.
