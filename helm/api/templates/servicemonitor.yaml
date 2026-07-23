@@ -1,0 +1,31 @@
+{{- /*
+  ServiceMonitor is a Prometheus Operator CRD.
+  When present, the Operator configures Prometheus to scrape this Service.
+
+  Without this (or pod annotations), Prometheus has no idea your /metrics exists.
+*/ -}}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "api.fullname" . }}
+  labels:
+    {{- include "api.labels" . | nindent 4 }}
+    # Optional: match whatever label your Prometheus selects on
+    release: mon
+spec:
+  # Which Services to scrape (label selector)
+  selector:
+    matchLabels:
+      {{- include "api.selectorLabels" . | nindent 6 }}
+
+  # Namespace of the Service (usually same as the chart release)
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+
+  endpoints:
+    - port: http          # must match Service port *name* in service.yaml
+      path: /metrics      # your FastAPI route
+      interval: 30s
+{{- end }}
